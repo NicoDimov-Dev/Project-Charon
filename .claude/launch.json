@@ -1,0 +1,7 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "web-test", "runtimeExecutable": "py", "runtimeArgs": ["-m", "http.server", "8766", "-d", "prototype/web-test"], "port": 8766 },
+    { "name": "reference", "runtimeExecutable": "py", "runtimeArgs": ["-m", "http.server", "8767", "-d", "reference"], "port": 8767 }
+  ]
+}

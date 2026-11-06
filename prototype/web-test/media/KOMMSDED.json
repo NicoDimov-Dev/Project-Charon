@@ -1,0 +1,1 @@
+{"source": "DATA/KOMMSDED.PC", "compressed_cwc": true, "frames": 6, "views": 5, "mirrored": true, "cell_w": 232, "cell_h": 110, "anchor_in_cell": [0, -1], "layout": "rows = frames, columns = views; index 0 transparent", "shadow_index": 241, "gap": [[20, 12, 8, 8, 16], [27, 20, 17, 17, 25], [24, 14, 7, 12, 22], [0, 0, 0, 5, 15], [30, 30, 36, 43, 46], [30, 28, 35, 40, 48]]}

@@ -1,0 +1,255 @@
+<meta charset="utf-8">
+<title>Project Charon</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@300;400;600&family=Saira+Stencil+One&display=swap">
+<style>
+  /* Layout: the 3D view owns the whole window; UI is thin glass strips pinned to its edges. */
+  :root {
+    --bg: #07090c;            /* deep space behind the frame */
+    --ink: #e9e3d6;           /* bleached sand */
+    --dim: #8f8a80;
+    --chrome: #4f8fd8;        /* Charon's blue-black chrome highlight */
+    --heat: #e8783c;          /* weapon-hot: combat mode */
+    --glass: rgba(8, 11, 16, 0.62);
+    --line: rgba(233, 227, 214, 0.14);
+    --f-ui: "Saira Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+    --f-mark: "Saira Stencil One", "Saira Semi Condensed", Impact, sans-serif;
+    color-scheme: dark;
+  }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body { background: var(--bg); color: var(--ink); font-family: var(--f-ui); overflow: hidden; }
+  #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
+
+  .hud { position: fixed; pointer-events: none; font-weight: 400; letter-spacing: .04em; text-shadow: 0 1px 2px rgba(0,0,0,.9), 0 0 8px rgba(0,0,0,.6); }
+  #loc { top: calc(14px + env(safe-area-inset-top, 0px)); left: max(16px, env(safe-area-inset-left, 0px));
+         font-size: 13px; text-transform: uppercase; letter-spacing: .22em; color: var(--ink); opacity: .78; }
+  #cam { top: calc(14px + env(safe-area-inset-top, 0px)); right: max(16px, env(safe-area-inset-right, 0px));
+         font-size: 11px; letter-spacing: .16em; color: var(--ink); opacity: .7; font-variant-numeric: tabular-nums; }
+  /* bottom strip: shield + ammo on the left, the action line in the middle, tools on the right */
+  #hover { left: 50%; transform: translateX(-50%); bottom: calc(66px + env(safe-area-inset-bottom, 0px));
+           padding: 5px 14px; font-size: 15px; white-space: nowrap; max-width: calc(100vw - 32px); overflow: hidden; text-overflow: ellipsis;
+           border-bottom: 1px solid var(--chrome); background: var(--glass); backdrop-filter: blur(6px); }
+  #say { left: 50%; transform: translateX(-50%); bottom: calc(112px + env(safe-area-inset-bottom, 0px));
+         max-width: min(640px, calc(100vw - 32px)); text-align: center; font-size: 19px; line-height: 1.35;
+         text-shadow: 0 1px 2px #000, 0 0 12px rgba(0,0,0,.8); }
+  #note { left: 50%; transform: translateX(-50%); top: calc(16px + env(safe-area-inset-top, 0px)); font-size: 14px; color: #ffd76a; letter-spacing: .06em; }
+  #vitals { position: fixed; left: max(16px, env(safe-area-inset-left, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+            display: grid; gap: 8px; z-index: 4; }
+  #shield { display: flex; align-items: center; gap: 8px; font-size: 10px; letter-spacing: .22em; text-transform: uppercase; color: var(--dim);
+            text-shadow: 0 1px 2px #000; }
+  #shield i { display: block; width: 132px; height: 4px; background: var(--line); position: relative; }
+  #shield i::after { content: ""; position: absolute; inset: 0; transform-origin: left; transform: scaleX(var(--v)); background: #d8433a; transition: transform .2s; }
+  #ammo { display: flex; gap: 3px; }
+  #ammo button, #tools button { font: inherit; color: var(--ink); background: var(--glass); border: 0; cursor: pointer; backdrop-filter: blur(6px); }
+  #ammo button { font-size: 13px; padding: 5px 9px; display: inline-flex; gap: 6px; align-items: baseline; border-bottom: 2px solid transparent; letter-spacing: .08em; }
+  #ammo button[aria-pressed="true"] { border-bottom-color: var(--heat); background: rgba(232,120,60,.2); }
+  #ammo button.empty { color: var(--dim); }
+  #ammo kbd { font: inherit; font-size: 10px; color: var(--dim); }
+  #ammo span { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  #tools { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); display: flex; gap: 3px; z-index: 4; }
+  #tools button { font-size: 11px; letter-spacing: .16em; text-transform: uppercase; padding: 7px 10px; }
+  #tools kbd { font: inherit; color: var(--chrome); margin-right: 4px; }
+  #ammo button:hover, #tools button:hover, #ammo button:focus-visible, #tools button:focus-visible { outline: 1px solid var(--chrome); }
+  /* combat mode: the sight replaces the pointer, the frame edges run hot, a tag sits above the ammo */
+  #mode { left: max(16px, env(safe-area-inset-left, 0px)); bottom: calc(86px + env(safe-area-inset-bottom, 0px));
+          font-size: 11px; letter-spacing: .3em; text-transform: uppercase; color: var(--heat); }
+  body.combat::after { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 3;
+                       box-shadow: inset 0 0 0 1px rgba(232,120,60,.35), inset 0 0 90px rgba(232,120,60,.16); }
+  body.combat #hover { border-bottom-color: var(--heat); }
+  body.hit #view { animation: hit .25s; }
+  @keyframes hit { 0% { filter: brightness(1.8) saturate(.4); } 100% { filter: none; } }
+  #cam { opacity: .5; }
+
+  /* conversation: Charon left, the other party right, red question, white answer, the question bar underneath */
+  #talk { position: fixed; inset: 0; z-index: 6; display: grid; grid-template-rows: minmax(0, 1fr) auto auto;
+          background: #000120; }   /* the portraits' own backdrop colour, so the heads sit in one space */
+  #talk .stage { display: grid; grid-template-columns: 1fr 1fr; align-items: end; justify-items: center; min-height: 0; padding: 12px 16px 0; }
+  #talk canvas { height: 100%; max-height: 58vh; width: auto; aspect-ratio: 254 / 287; image-rendering: auto; min-height: 0;
+                 /* feather the clip edges so each portrait's own black backdrop melts into the stage instead of showing a box */
+                 -webkit-mask-image: linear-gradient(to right, transparent, #000 12%, #000 88%, transparent), linear-gradient(to bottom, transparent, #000 10%, #000 92%, transparent);
+                 -webkit-mask-composite: source-in;
+                 mask-image: linear-gradient(to right, transparent, #000 12%, #000 88%, transparent), linear-gradient(to bottom, transparent, #000 10%, #000 92%, transparent);
+                 mask-composite: intersect; }
+  #talk .lines { padding: 6px max(16px, 6vw) 10px; min-height: 104px; }
+  #dlg-name { font-size: 11px; letter-spacing: .3em; text-transform: uppercase; color: var(--chrome); }
+  #dlg-q { margin: 6px 0 4px; font-size: 16px; color: #ff4b3e; min-height: 1.2em; }
+  #dlg-line { margin: 0; font-size: 19px; line-height: 1.45; max-width: 72ch; text-wrap: pretty; }
+  #dlg-line em { font-style: normal; color: #9cc4f2; border-bottom: 1px dotted currentColor; }
+  #talk .bar { background: rgba(4,6,14,.86); border-top: 1px solid var(--line); padding: 10px max(16px, 3vw) calc(12px + env(safe-area-inset-bottom, 0px));
+               display: grid; gap: 8px; max-height: 42vh; overflow: auto; }
+  #talk .row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  #talk .row > span { font-size: 10px; letter-spacing: .2em; text-transform: uppercase; color: var(--dim); margin-right: 6px; }
+  #talk button { font: inherit; color: var(--ink); background: none; border: 1px solid var(--line); padding: 4px 10px; cursor: pointer; font-size: 13px;
+                 display: inline-flex; align-items: center; gap: 6px; }
+  #talk button img { height: 20px; width: auto; }
+  #talk button:hover, #talk button:focus-visible { border-color: var(--chrome); outline: none; }
+  #talk button[aria-pressed="true"] { background: rgba(79,143,216,.25); border-color: var(--chrome); }
+  #dlg-verbs button[aria-pressed="true"] { background: rgba(255,75,62,.18); border-color: #ff4b3e; }
+  #dlg-topics { display: flex; flex-wrap: wrap; gap: 4px; }
+  #dlg-topics .k1 { color: #f0c27a; } #dlg-topics .k2 { color: #9be3a0; } #dlg-topics .k3 { color: #b7cff5; }
+  #talk .split { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  body:has(#talk:not([hidden])) .hud, body:has(#talk:not([hidden])) #vitals, body:has(#talk:not([hidden])) #tools { display: none; }
+
+  /* panels: inventory, Ethereal Cortex, mission, menu */
+  #panel { position: fixed; z-index: 7; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+           width: min(420px, calc(100vw - 32px)); max-height: calc(100vh - 120px); overflow: auto; background: rgba(6,9,16,.9); backdrop-filter: blur(10px);
+           border-top: 1px solid var(--chrome); padding: 12px 16px 16px; }
+  #panel header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  #panel-title { font-size: 11px; letter-spacing: .3em; text-transform: uppercase; color: var(--chrome); }
+  #panel button { font: inherit; color: var(--ink); background: none; border: 1px solid var(--line); padding: 4px 10px; cursor: pointer; font-size: 12px; }
+  #panel button:hover { border-color: var(--chrome); }
+  #panel h3 { font-size: 10px; letter-spacing: .22em; text-transform: uppercase; color: var(--dim); font-weight: 400; margin: 12px 0 4px; }
+  #panel p { margin: 0 0 6px; line-height: 1.5; }
+  .inv { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  .inv li { display: grid; grid-template-columns: 52px 1fr auto; align-items: center; gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+  .inv li.ammo { grid-template-columns: 52px 1fr; }
+  .inv li.ammo:last-child { grid-template-columns: 1fr; color: var(--dim); }
+  .inv img { max-width: 48px; max-height: 40px; justify-self: center; }
+  .inv b { font-weight: 400; }
+  .inv span { display: flex; gap: 4px; }
+  .chip { display: inline-block; padding: 2px 8px; border: 1px solid var(--line); margin: 0 2px 4px 0; font-size: 13px; }
+  .dim { color: var(--dim); }
+  .mission { font-size: 17px; }
+  .menu { display: flex; gap: 6px; margin-bottom: 10px; }
+  .keys { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; margin: 0; }
+  .keys dt { color: var(--chrome); } .keys dd { margin: 0; color: var(--dim); }
+
+  #notice, #keypad, #examine, #end { position: fixed; inset: 0; z-index: 8; display: grid; place-items: center; background: rgba(0,0,0,.7); }
+  #notice-text { width: min(512px, calc(100vw - 32px)); aspect-ratio: 512 / 288; background: url(media/NOTE0000.png) center / cover;
+                 display: grid; align-content: center; justify-items: center; gap: 4px; padding: 24px; font-family: Georgia, serif; cursor: pointer; }
+  #notice-text p { margin: 0; text-align: center; font-size: clamp(14px, 2.6vw, 20px); }
+  #notice-text .red { color: #a5161a; font-weight: 700; } #notice-text .blue { color: #1d3a8a; }
+  #kp { background: #171a20; border: 1px solid #3a3f4a; padding: 16px; display: grid; gap: 10px; box-shadow: 0 10px 40px #000; }
+  #kp-disp { font: 600 26px/1 ui-monospace, monospace; letter-spacing: .3em; color: #7dfb8a; background: #050805; padding: 10px 12px; text-align: center; }
+  #kp .keys2 { display: grid; grid-template-columns: repeat(3, 56px); gap: 6px; }
+  #kp button { font: 600 20px/1 var(--f-ui); color: #dfe6ef; background: #2a303b; border: 1px solid #454d5c; height: 48px; cursor: pointer; }
+  #kp button:hover { background: #36404f; }
+  #kp button[data-k="x"] { color: #ff6d5e; } #kp button[data-k="c"] { font-size: 14px; }
+  #examine figure { margin: 0; display: grid; gap: 8px; justify-items: center; }
+  #examine video { width: min(640px, calc(100vw - 32px)); background: #000; }
+  #examine figcaption { letter-spacing: .1em; }
+  #end { background: rgba(0,0,0,.82); text-align: center; }
+  #end h2 { font-family: var(--f-mark); font-weight: 400; font-size: clamp(26px, 5vw, 44px); letter-spacing: .1em; margin: 0 0 8px; }
+  #end p { color: var(--dim); margin: 0 0 18px; }
+  #end button, #retry { font: inherit; font-size: 13px; letter-spacing: .3em; color: var(--ink); background: none; border: 1px solid var(--chrome); padding: 10px 26px; cursor: pointer; }
+  #dead { position: fixed; inset: 0; z-index: 8; display: grid; place-content: center; gap: 16px; text-align: center;
+          background: rgba(40,0,0,.55); font-size: 22px; letter-spacing: .2em; text-transform: uppercase; }
+  #dead p { margin: 0; }
+
+  #title, #intro, #loading { position: fixed; inset: 0; z-index: 10; background: var(--bg); }
+  #title { display: grid; place-items: center; }
+  #title video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .55; }
+  #title .panel { position: relative; display: grid; gap: 18px; justify-items: center; text-align: center; padding: 24px; }
+  #title h1 { font-family: var(--f-mark); font-weight: 400; font-size: clamp(34px, 7vw, 72px); letter-spacing: .12em; margin: 0; text-wrap: balance; }
+  #title .how { font-size: 12px; color: var(--ink); opacity: .7; }
+  #title p { margin: 0; color: var(--dim); font-size: 14px; letter-spacing: .1em; max-width: 46ch; line-height: 1.5; }
+  #start { font: inherit; font-size: 16px; letter-spacing: .3em; text-transform: uppercase; color: var(--ink);
+           background: none; border: 1px solid var(--chrome); padding: 12px 34px; cursor: pointer; }
+  #start:hover, #start:focus-visible { background: rgba(79,143,216,.2); outline: none; }
+  #title label { font-size: 13px; color: var(--dim); letter-spacing: .08em; display: flex; gap: 8px; align-items: center; cursor: pointer; }
+
+  #intro { display: grid; place-items: center; background: #000; }
+  #video { width: 100%; height: 100%; object-fit: contain; }
+  #subtitle { position: absolute; bottom: calc(8% + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%);
+              width: min(760px, calc(100vw - 32px)); text-align: center; font-size: 21px; line-height: 1.4; white-space: pre-line;
+              text-shadow: 0 1px 2px #000, 0 0 14px #000; }
+  #skip { position: absolute; top: calc(14px + env(safe-area-inset-top, 0px)); right: max(16px, env(safe-area-inset-right, 0px));
+          font: inherit; font-size: 12px; letter-spacing: .2em; text-transform: uppercase; color: var(--dim);
+          background: none; border: 1px solid var(--line); padding: 7px 14px; cursor: pointer; }
+  #skip:hover { color: var(--ink); border-color: var(--chrome); }
+  #loading { display: grid; place-items: center; font-size: 12px; letter-spacing: .3em; color: var(--dim); z-index: 9; }
+  @media (max-width: 760px) { #say { font-size: 17px; } #tools button span { display: none; } #talk canvas { max-height: 40vh; } }
+  @media (prefers-reduced-motion: reduce) { #title video { display: none; } }
+</style>
+
+<canvas id="view"></canvas>
+<div class="hud" id="loc"></div>
+<div class="hud" id="cam" hidden></div>
+<section id="talk" hidden aria-label="Conversation">
+  <div class="stage"><canvas id="p-charon" width="254" height="287" aria-label="Charon"></canvas><canvas id="p-npc" width="254" height="287" aria-label="Speaker"></canvas></div>
+  <div class="lines"><span id="dlg-name"></span><p id="dlg-q"></p><p id="dlg-line" aria-live="polite"></p></div>
+  <div class="bar">
+    <div class="split">
+      <div class="row" id="dlg-verbs"><button type="button" id="dlg-who">Who are you?</button><button type="button" data-v="0">Who is</button><button type="button" data-v="1">What is</button><button type="button" data-v="2">Where is</button><button type="button" data-v="3">Give me</button></div>
+      <div class="row" id="dlg-att" title="Attitude"><span>Attitude</span><button type="button" data-a="0">Meek</button><button type="button" data-a="1">Normal</button><button type="button" data-a="2">Aggressive</button></div>
+    </div>
+    <div class="split">
+      <div class="row" id="dlg-filter"><span>Cortex</span><button type="button" data-f="-1">All</button><button type="button" data-f="0">Objects</button><button type="button" data-f="1">Characters</button><button type="button" data-f="2">Locations</button><button type="button" data-f="3">Special</button></div>
+      <button id="dlg-bye" type="button">Leave</button>
+    </div>
+    <div id="dlg-topics" aria-label="Known topics"></div>
+    <div class="row" id="dlg-offer"></div>
+  </div>
+</section>
+<section id="panel" hidden><header><span id="panel-title"></span><button id="panel-close" type="button">Close</button></header><div id="panel-body"></div></section>
+<section id="notice" hidden><div id="notice-text"></div></section>
+<section id="keypad" hidden><div id="kp"><div id="kp-disp">______</div><div class="keys2">
+  <button type="button" data-k="1">1</button><button type="button" data-k="2">2</button><button type="button" data-k="3">3</button>
+  <button type="button" data-k="4">4</button><button type="button" data-k="5">5</button><button type="button" data-k="6">6</button>
+  <button type="button" data-k="7">7</button><button type="button" data-k="8">8</button><button type="button" data-k="9">9</button>
+  <button type="button" data-k="c">DEL</button><button type="button" data-k="0">0</button><button type="button" data-k="x">✕</button></div></div></section>
+<section id="examine" hidden><figure><video id="pu" playsinline muted></video><figcaption id="examine-name"></figcaption></figure></section>
+<section id="dead" hidden><p>Charon is down.</p><button id="retry" type="button">Try again</button></section>
+<section id="end" hidden><div><h2>The City Gates open</h2><p>Kar-es-Taal lies beyond. This test ends here.</p><button id="end-restart" type="button">Play again</button></div></section>
+<div class="hud" id="hover" hidden></div>
+<div class="hud" id="say" hidden></div>
+<div class="hud" id="note" hidden></div>
+<div class="hud" id="mode" hidden>Combat · right-click to holster</div>
+<div id="vitals"><div id="shield" style="--v:1" aria-label="Shield"><span>Shield</span><i></i></div><div id="ammo" role="group" aria-label="Ammunition"></div></div>
+<nav id="tools" aria-label="Tools">
+  <button type="button" data-tool="inv" title="Inventory (I)"><kbd>I</kbd><span>Inventory</span></button>
+  <button type="button" data-tool="cortex" title="Ethereal Cortex (C)"><kbd>C</kbd><span>Cortex</span></button>
+  <button type="button" data-tool="mission" title="Mission reminder (M)"><kbd>M</kbd><span>Mission</span></button>
+  <button type="button" data-tool="menu" title="Main menu (Esc)"><kbd>Esc</kbd><span>Menu</span></button>
+</nav>
+
+<div id="loading">LOADING CANYON.WLD</div>
+
+<section id="title">
+  <video src="media/TITLE.mp4" autoplay muted loop playsinline></video>
+  <div class="panel">
+    <h1>PERFECT ASSASSIN</h1>
+    <p>Remake test — the opening canyon, rebuilt from the 1997 map, texture, camera, character and dialogue data.</p>
+    <p class="how">Click to walk and to do what the label says · Right-click for combat mode, then click to fire · 1 2 3 ammo · Esc menu</p>
+    <button id="start" type="button">Start</button>
+    <label for="withIntro"><input id="withIntro" type="checkbox" checked> Play the original intro</label>
+  </div>
+</section>
+
+<section id="intro" hidden>
+  <video id="video" playsinline></video>
+  <div id="subtitle" hidden></div>
+  <button id="skip" type="button">Skip</button>
+</section>
+
+<script>
+  // Start works even before the game module has loaded; errors are shown instead of failing silently.
+  (function () {
+    var pending = null, loading = document.getElementById('loading');
+    window.__fail = function (err) {
+      loading.hidden = false;
+      loading.textContent = 'Could not start: ' + (err && err.message ? err.message : err);
+    };
+    window.addEventListener('error', function (e) { if (e.message) window.__fail(e.message); });
+    window.addEventListener('unhandledrejection', function (e) { window.__fail(e.reason); });
+    document.getElementById('start').addEventListener('click', function () {
+      var withIntro = document.getElementById('withIntro').checked;
+      document.getElementById('title').hidden = true;
+      if (window.__startGame) window.__startGame(withIntro);
+      else pending = withIntro;
+    });
+    window.__startPending = function () { return pending; };
+    // Chrome refuses module scripts, fetch() and WebGL textures on file:// pages, so say so instead of hanging
+    if (location.protocol === 'file:') {
+      loading.innerHTML = 'This page has to be served, not opened as a file.<br>Double-click <b>Play.bat</b> in this folder instead.';
+      loading.style.cssText = 'text-align:center;line-height:2;letter-spacing:.1em;padding:24px';
+      document.getElementById('start').disabled = true;
+      document.getElementById('start').textContent = 'Run Play.bat';
+    }
+  })();
+</script>
+<script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }</script>
+<script type="module" src="game.js"></script>

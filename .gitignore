@@ -1,0 +1,23 @@
+# The original game and everything ripped from it: rebuildable, and not ours to publish
+/Original/
+/Extracted/
+/Game/C/
+/Game/dosbox/
+/Game/*.txt
+/Game/_shot.png
+
+# build outputs and scratch
+/tools/models/build/
+/tools/sprites/build/
+/models/*/work/
+/prototype/*.tar
+/reference/video/
+__pycache__/
+*.pyc
+*.blend1
+.DS_Store
+Thumbs.db
+
+# local Claude Code state
+/.claude/settings.local.json
+/.claude/scheduled_tasks.lock

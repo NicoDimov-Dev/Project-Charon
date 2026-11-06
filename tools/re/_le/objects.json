@@ -1,0 +1,19 @@
+{
+ "objects": [
+  {
+   "vsize": 240355,
+   "base": 65536,
+   "flags": 8261,
+   "pidx": 1,
+   "pcount": 59
+  },
+  {
+   "vsize": 157472,
+   "base": 327680,
+   "flags": 8259,
+   "pidx": 60,
+   "pcount": 36
+  }
+ ],
+ "entry": 247516
+}
