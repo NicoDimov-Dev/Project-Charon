@@ -207,7 +207,8 @@ const bloodPool = (r) => {
 async function loadCreature(name, height, scene, renderer, tint = null, opt = {}) {
   height *= CHAR_SCALE;
   const S = await modelSetup(scene, renderer);
-  if (!CREATURE_CACHE[name]) CREATURE_CACHE[name] = S.loader.loadAsync(`media/${name}.glb?${Date.now()}`);
+  // low-power mode: the reduced copy (tools/models/make_lowpoly.py: ~20-30k triangles, 1024 px textures)
+  if (!CREATURE_CACHE[name]) CREATURE_CACHE[name] = S.loader.loadAsync(`media/${name}${LOW ? '_lo' : ''}.glb?${Date.now()}`);
   const gltf = await CREATURE_CACHE[name];
   const model = S.SkeletonUtils.clone(gltf.scene), root = new THREE.Group();
   model.updateMatrixWorld(true);
@@ -246,7 +247,7 @@ async function loadCreature(name, height, scene, renderer, tint = null, opt = {}
 // Needs actions 'idle', 'walk' and 'aim'; the model faces +Z and is measured in metres.
 async function loadHero3D(name, renderer, scene) {
   const S = await modelSetup(scene, renderer);
-  const gltf = await S.loader.loadAsync(`media/${name}.glb?${Date.now()}`);
+  const gltf = await S.loader.loadAsync(`media/${name}${LOW ? '_lo' : ''}.glb?${Date.now()}`);
   const model = gltf.scene, root = new THREE.Group();
   model.updateMatrixWorld(true);                 // skinned bounds need the bones' world matrices
   const box = new THREE.Box3().setFromObject(model, true);
@@ -760,9 +761,34 @@ function opaqueAt(spr, uv) {
 const solidHits = (hits) => hits.filter((h) => !h.object.isSprite || opaqueAt(h.object, h.uv));
 
 // ---------------------------------------------------------------- game
+// Low-power mode for tablets and phones (touch screen, or 4 GB of memory or less), forced either way with
+// ?q=low / ?q=high: 1x pixels and no antialiasing, a smaller shadow map, textures capped at 1024 px, a coarser
+// terrain mesh, no cave fill lights and less scattered rubble. Mobile browsers kill a tab that runs out of
+// graphics memory, which is what closed Chrome on a tablet.
+const QUALITY = new URLSearchParams(location.search).get('q');
+const LOW = QUALITY ? QUALITY === 'low' : (matchMedia('(pointer: coarse)').matches || (navigator.deviceMemory || 8) <= 4);
+const TEX_CAP = LOW ? 1024 : 4096;
+// shrink every texture in `root` larger than TEX_CAP before it reaches the GPU (canvas copy, once per texture)
+const capped = new WeakSet();
+function capTextures(root) {
+  if (TEX_CAP >= 4096) return;
+  root.traverse((o) => {
+    if (!o.material) return;
+    for (const m of [].concat(o.material)) for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap', 'bumpMap', 'alphaMap']) {
+      const t = m[k], im = t && t.image;
+      if (!im || capped.has(t.source) || !(im.width > TEX_CAP || im.height > TEX_CAP)) continue;
+      const s = TEX_CAP / Math.max(im.width, im.height), c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(im.width * s)); c.height = Math.max(1, Math.round(im.height * s));
+      c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+      t.source.data = c; t.needsUpdate = true; capped.add(t.source);
+    }
+  });
+}
+
 async function main() {
-  const renderer = new THREE.WebGLRenderer({ canvas: $('#view'), antialias: true });
-  renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+  const renderer = new THREE.WebGLRenderer({ canvas: $('#view'), antialias: !LOW, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(LOW ? 1 : Math.min(2, devicePixelRatio));
+  if (LOW) console.info('low-power mode (?q=high to override)');
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(40, 1, 110, 45000);
@@ -781,7 +807,8 @@ async function main() {
     const MOUTHS = [[2620, 700, 2800, 1150], [3880, 700, 4060, 1190]];
     const terrain = T.buildTerrain({ masks: world.masks, N: world.N, seeds,
       flat: [[WALL_X, -99999, 99999, 99999], [WALL_X - 300, 1460, WALL_X, 1880], ...MOUTHS],
-      pave: { id: 'concrete_floor_worn_001', rect: [WALL_X - 1000, 1180, WALL_X + 40, 2160] }, sinkX: WALL_X + 300 });   // the gate forecourt
+      pave: { id: 'concrete_floor_worn_001', rect: [WALL_X - 1000, 1180, WALL_X + 40, 2160] }, sinkX: WALL_X + 300,   // the gate forecourt
+      step: LOW ? 24 : 16 });
     scene.add(terrain.mesh); world.terrain = terrain;
     const S = await import('./structures.js');
     const cityWall = S.buildCityWall({ renderer, face: WALL_X });
@@ -789,6 +816,7 @@ async function main() {
     world.animated = [cityWall];
     world.blockMeshes.forEach((m) => { m.visible = false; });
     world.lights = T.addSun(scene, renderer, terrain.bounds);
+    if (LOW) { world.lights.sun.shadow.mapSize.set(1024, 1024); renderer.shadowMap.type = THREE.PCFShadowMap; }
     // the cave: rooms reached from the canyon's cave links, roofed over (passages included)
     // the doorway cells are only partly solid, so close them for this search or it leaks into the canyon
     const caveLinks = Object.values(Wd.locations)[0].links.filter((l) => l.to === 1);
@@ -803,10 +831,11 @@ async function main() {
     for (const [a, , c] of MOUTHS) { cx0 = Math.min(cx0, a); cx1 = Math.max(cx1, c); }
     // 1997's cave has no openings in its roof: its only 'pool of light' floor tiles are the two mouth cells
     // (10,3) and (15,3), daylight reaching in from the canyon; the rest is evenly dim (soft fills)
-    const ceiling = T.buildCaveCeiling({ open: caveOpen, x0: cx0 - 300, z0: cz0 - 300, x1: cx1 + 300, z1: cz1 + 300, maxHoles: 0 });
+    const ceiling = T.buildCaveCeiling({ open: caveOpen, x0: cx0 - 300, z0: cz0 - 300, x1: cx1 + 300, z1: cz1 + 300, maxHoles: 0, step: LOW ? 24 : 16 });
     scene.add(ceiling.mesh);
-    for (const [fx, fz] of ceiling.fills) { const l = new THREE.PointLight(0xd9a070, 9, 1500, 1); l.position.set(fx, 220, fz); scene.add(l); }
-    for (const [a, , c] of MOUTHS) {
+    // every real-time light makes every material dearer to draw: low-power mode keeps only the ambient
+    if (!LOW) for (const [fx, fz] of ceiling.fills) { const l = new THREE.PointLight(0xd9a070, 9, 1500, 1); l.position.set(fx, 220, fz); scene.add(l); }
+    if (!LOW) for (const [a, , c] of MOUTHS) {
       const l = new THREE.SpotLight(0xffe2b8, 22, 900, 0.75, 0.6, 1); l.position.set((a + c) / 2, 260, 1080);
       l.target.position.set((a + c) / 2, 0, 820); scene.add(l, l.target);
     }
@@ -817,23 +846,8 @@ async function main() {
     const CV = await import('./cave.js'); world.CV = CV;
     world.portals = MOUTHS.map(([a, , c], i) => CV.buildCavePortal({ terrain: terrain.mesh, x0: a, x1: c, zBack: 930, zMin: 1140, seed: i + 1 }));
     for (const P of world.portals) scene.add(P.mesh, P.void);
-    // Kar-es-Taal past the gate (city.js): its streets join the walk grid once the gate opens
-    if (new URLSearchParams(location.search).get('city') !== '0') {
-      const C = await import('./city.js');
-      const city = await C.buildCity({ renderer, terrainMaterial: terrain.mesh.material });
-      scene.add(city.group); world.city = city; world.animated.push(city.group);
-      world.pick.push(...city.pick);
-      world.setWalk(C.CITY.x0 - 20, C.CITY.z0, 99999, C.CITY.z1, 0);
-      for (const s of city.streets) world.setWalk(s[0], s[1], s[2], s[3], 1);
-      for (const [x, z, r] of city.blockers) world.blockers.add({ position: new THREE.Vector3(x, 0, z), userData: { radius: r } });
-      world.rebuildWalk();
-      // the sun's shadows now cover the city too
-      const B = { X0: Math.min(terrain.bounds.X0, city.bounds.X0), Z0: Math.min(terrain.bounds.Z0, city.bounds.Z0), X1: Math.max(terrain.bounds.X1, city.bounds.X1), Z1: Math.max(terrain.bounds.Z1, city.bounds.Z1) };
-      const sun = world.lights.sun, scx = (B.X0 + B.X1) / 2, scz = (B.Z0 + B.Z1) / 2, span = Math.max(B.X1 - B.X0, B.Z1 - B.Z0) / 2;
-      sun.position.set(scx - 2600, 4200, scz + 1500); sun.target.position.set(scx, 0, scz);
-      Object.assign(sun.shadow.camera, { left: -span, right: span, top: span, bottom: -span }); sun.shadow.camera.updateProjectionMatrix();
-      console.info('city', city.stats);
-    }
+    // Kar-es-Taal is not built yet: it will be rebuilt from its 1997 maps (JABALCIT, JABALSTR, CITYJAB, MOJOCLB)
+    // with their own cameras. Until then the gate opens and the level ends, as stage 1 does in 1997.
     scene.userData.worldLit = true;
     renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
     scene.fog = new THREE.Fog(0xd2ad86, 4500, 16000);
@@ -1148,7 +1162,7 @@ async function main() {
       spr.material.colorWrite = false; spr.material.depthWrite = false;
     }));
     let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-    const E = world.terrain.edges, n = Math.min(90, E.length);
+    const E = world.terrain.edges, n = Math.min(LOW ? 30 : 90, E.length);
     await Promise.all(Array.from({ length: n }, async () => {
       const [x, z] = E[Math.floor(rnd() * E.length)], big = rnd() < 0.25;
       const r = await PR.placeRock(PR.RUBBLE[Math.floor(rnd() * PR.RUBBLE.length)], x, z, big ? 120 + rnd() * 160 : 30 + rnd() * 70, rnd() * 6.28, { sink: 0.3, squash: 0.6 + rnd() * 0.5 });
@@ -1296,18 +1310,9 @@ async function main() {
   });
   const openGate = () => {
     flags.gateOpen = true; sfx('CLANG');
-    if (!world.city || !world.cityWall || !world.cityWall.userData.open) { $('#end').hidden = false; return; }
-    // the remake: the gate rises and the way into Kar-es-Taal opens
-    world.cityWall.userData.open();
-    setTimeout(() => {
-      const [a, b, c, d] = world.cityWall.userData.passage; world.setWalk(a, b, c, d, 1); world.rebuildWalk(); note('City of Kar-es-Taal');
-      // the tunnel mouth becomes a click target: 1997's wall mesh (unseen, still used for picking) stands across it,
-      // so a click into the gateway would otherwise land on that wall and go nowhere
-      const gw = new THREE.Mesh(new THREE.BoxGeometry(c - a, 380, d - b), new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
-      gw.position.set((a + c) / 2, 190, (b + d) / 2); gw.visible = false; gw.updateMatrixWorld();
-      gw.userData = { kind: 'gateway', mid: (b + d) / 2, out: a - 160, in: c + 260 };
-      world.pick.push(gw);
-    }, 2600);
+    // the remake's door rises in the doorway, then the level ends (the city comes later, from its 1997 maps)
+    if (world.cityWall && world.cityWall.userData.open) { world.cityWall.userData.open(); setTimeout(() => ($('#end').hidden = false), 3600); }
+    else $('#end').hidden = false;
   };
   $('#end-restart').addEventListener('click', () => location.reload());
 
@@ -1422,10 +1427,6 @@ async function main() {
     const hits = solidHits(ray.intersectObjects([...world.pick, ...exitGroup.children, ...live, ...ground, ...hot], false));
     if (!hits.length) return null;
     let h = hits[0];
-    // the open gateway wins over 1997's unseen wall across it
-    const gwi = hits.findIndex((x) => x.object.userData.kind === 'gateway');
-    if (gwi >= 0 && hits.slice(0, gwi).every((x) => x.object.userData.kind === 'wall' && !(world.city && world.city.pick.includes(x.object)))) h = hits[gwi];
-    if (h.object.userData.kind === 'gateway') return { kind: 'gateway', gw: h.object, point: h.point };
     const ex = hits.find((x) => x.object.userData.kind === 'exit');
     if (ex && h.object.userData.kind === 'floor' && ex.distance < h.distance + 20) h = ex;
     const o = h.object, u = o.userData;
@@ -1447,10 +1448,6 @@ async function main() {
     if (!h) return null;
     switch (h.kind) {
       case 'floor': case 'wall': return { label: h.name, cursor: 'default', run: () => walkTo(h.point.x, h.point.z) };
-      case 'gateway': {                                   // through the gate, whichever way Charon is facing it
-        const u = h.gw.userData, inside = hero.x > (u.out + u.in) / 2;
-        return { label: inside ? placeName(0) : 'Kar-es-Taal', cursor: 'pointer', run: () => walkTo(inside ? u.out : u.in, u.mid) };
-      }
       case 'exit': return { label: placeName(h.link.to), cursor: 'pointer', run: () => walkTo(h.link.cell[0] * CELL + 128, h.link.cell[1] * CELL + 128) };
       case 'prop': return { label: h.prop.userData.name, cursor: 'default', run: () => walkTo(h.point.x, h.point.z) };
       case 'pickup': return { label: verb(25) + h.spr.userData.name, cursor: 'pointer', run: () => approach(h.spr.position.x, h.spr.position.z, 60, () => {
@@ -1645,7 +1642,6 @@ async function main() {
   // ------------------------------------------------ loop
   enterLocation(locId);
   let last = performance.now(), animT = 0;
-  let inCity = false, cityWalls = [], camYaw = 0; const cityCam = new THREE.Vector3(), cityLook = new THREE.Vector3(), camRay = new THREE.Raycaster();
   const tick = (now) => {
     const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = Math.max(last, now);
     const hold = paused();
@@ -1658,35 +1654,12 @@ async function main() {
       moving = true;
     }
     updateLocation();
-    // inside Kar-es-Taal there are no 1997 cameras: a camera follows Charon from above and behind
-    if (world.city && world.city.contains(hero.x, hero.y)) {
-      if (!inCity) { inCity = true; ui.loc.textContent = 'Kar-es-Taal'; camera.userData.focal = 760; fit(); cityCam.set(hero.x - 520, 640, hero.y + 560); cityLook.set(hero.x, 40, hero.y); cityWalls = world.city.pick.filter((m) => m.userData.kind === 'wall'); if (world.cityWall) cityWalls.push(world.cityWall); }
-      if (!window.__camLock) {
-        // the kasbah's lanes are narrow: if a house stands between Charon and the camera, come in closer and steeper
-        const head = new THREE.Vector3(hero.x, 70, hero.y);
-        // the usual view is from the south-west; when that is walled off (just inside the gate, say) swing round to
-        // a side that is clear, and only if none is, come in steeper
-        const at = (yaw, s) => {
-          const ox = -520 * s, oz = 560 * s, cs = Math.cos(yaw), sn = Math.sin(yaw);
-          return new THREE.Vector3(hero.x + ox * cs - oz * sn, 640 + (1 - s) * 260, hero.y + ox * sn + oz * cs);
-        };
-        const clear = (c) => { const d = c.clone().sub(head), len = d.length(); camRay.set(head, d.divideScalar(len)); camRay.far = len; return !camRay.intersectObjects(cityWalls, true).length; };
-        let want = null;
-        search: for (const s of [1, 0.8, 0.62]) for (const yaw of [0, camYaw, 0.7, -0.7, 1.4, -1.4, 2.1, -2.1, Math.PI]) {
-          const c = at(yaw, s); if (clear(c)) { want = c; camYaw = yaw; break search; }
-        }
-        if (!want) for (const s of [0.46, 0.32, 0.2]) { want = at(camYaw, s); if (clear(want)) break; }
-        const k = 1 - Math.exp(-dt * 3);
-        cityCam.lerp(want, k); cityLook.lerp(head.setY(40), k);
-        camera.position.copy(cityCam); camera.lookAt(cityLook);
-      }
-    } else if (inCity) { inCity = false; camIdx = -1; lastCell = null; ui.loc.textContent = placeName(locId === 3 ? 0 : locId); }
     if (world.animated) for (const o of world.animated) o.userData.tick && o.userData.tick(now / 1000);
     if (world.lights) {                                   // the open sky barely reaches into the cave
       const inC = world.inCave && world.inCave(hero.x, hero.y), k = Math.min(1, dt * 2.5);
       world.lights.sky.intensity += ((inC ? 0.45 : 0.9) - world.lights.sky.intensity) * k;
       // 1997's cave is dim but evenly lit (floor and walls read everywhere): a warm ambient while inside
-      if (world.lights.cave) world.lights.cave.intensity += ((inC ? 0.5 : 0) - world.lights.cave.intensity) * k;
+      if (world.lights.cave) world.lights.cave.intensity += ((inC ? (LOW ? 0.8 : 0.5) : 0) - world.lights.cave.intensity) * k;
       renderer.toneMappingExposure += ((inC ? 1.35 : 1.05) - renderer.toneMappingExposure) * k;
     }
     const toCam = Math.atan2(camera.position.z - hero.y, camera.position.x - hero.x);
@@ -1812,9 +1785,14 @@ async function main() {
       if (b.t >= b.n) { scene.remove(b.s); blasts.splice(i, 1); } else b.s.userData.cell(0, Math.floor(b.t));
     }
     updateMarker(dt);
+    // low-power mode: shrink textures as they finish loading, before their first upload (every frame for the
+    // first half minute, while models and scans stream in, then every two seconds)
+    if (LOW && (now - loopT0 < 30000 || now - capT > 2000)) { capTextures(scene); capT = now; }
     renderer.render(scene, camera);
     requestAnimationFrame(tick);
   };
+  let capT = 0; const loopT0 = performance.now();
+  if (LOW) capTextures(scene);
   ui.loading.hidden = true;
   requestAnimationFrame(tick);
   return { npcs, openTalk, known, life, walkTo, hero, setCamera, world, LENS, fit, camera, scene, ammo, inv, flags, props, ground, hot, PICKUPS,
@@ -1825,6 +1803,7 @@ async function main() {
     hits: (x, y) => { mouse.set((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1); ray.setFromCamera(mouse, camera);
       return solidHits(ray.intersectObjects([...world.pick, ...npcs.filter((n) => n.active).map((n) => n.spr), ...ground, ...hot], false)).slice(0, 4).map((h) => [h.object.userData.kind, h.object.userData.name || (h.object.userData.npc && h.object.userData.npc.id), Math.round(h.distance), h.point.toArray().map(Math.round)]); },
     probe: (x, y) => { const it = intent(hit({ clientX: x, clientY: y })); return it && it.label; },
+    renderer,
     status: () => ({ loc: locId, cam: camIdx, x: Math.round(hero.x), y: Math.round(hero.y), moving: hero.path.length, shield: life.shield, ammo: ammo.stock.slice(), inv: [...inv.keys()], komms: flags.komms }) };
 }
 
