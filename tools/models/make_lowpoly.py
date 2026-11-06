@@ -40,6 +40,8 @@ for im in bpy.data.images:
         im.pack()
 
 out = os.path.splitext(os.path.abspath(a.src))[0] + '_lo.glb'
+# export_extras keeps the custom properties the game reads (walk_stride_m / walk_cycle_s: the walking pace);
+# without them Charon walks at a default speed that no longer matches his steps
 bpy.ops.export_scene.gltf(filepath=out, export_format='GLB', export_animations=True, export_image_format='JPEG',
-                          export_jpeg_quality=85)
+                          export_jpeg_quality=85, export_extras=True)
 print('wrote', out, round(os.path.getsize(out) / 1e6, 1), 'MB')

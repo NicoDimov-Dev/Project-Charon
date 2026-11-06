@@ -1278,10 +1278,18 @@ async function main() {
     return `<h3>${clean(TX[s]).replace(/^List known /, '')}</h3><p>${items.length ? items.map(([tt, n]) => `<span class="chip">${topicName(tt, n)}</span>`).join(' ') : '<span class="dim">—</span>'}</p>`;
   }).join(''));
   const openMission = () => panel(clean(TX[708]), `<p class="mission">${T.comms.SPACE}</p><p class="dim">Find a way into the city of Kar-es-Taal.</p>`);
-  const openMenu = () => panel(clean(TX[702]), `<div class="menu"><button type="button" data-m="resume">Resume</button><button type="button" data-m="restart">Restart</button></div>`
+  // graphics quality is chosen at start-up (?q=low / ?q=high), so switching restarts the game in the other mode
+  const withQuality = (q) => { const u = new URL(location.href); u.searchParams.set('q', q); return u.href; };
+  const openMenu = () => panel(clean(TX[702]), `<div class="menu"><button type="button" data-m="resume">Resume</button><button type="button" data-m="restart">Restart</button>`
+    + `<button type="button" data-m="quality">Graphics: ${LOW ? 'Low power' : 'High'} — switch to ${LOW ? 'High' : 'Low power'}</button></div>`
     + `<dl class="keys"><dt>Click</dt><dd>walk, or the action named under the pointer</dd><dt>Right-click</dt><dd>combat mode on or off; in combat, click fires at the sight</dd>`
     + `<dt>1 2 3 · wheel</dt><dd>multi-purpose, high velocity, explosive</dd><dt>I C M</dt><dd>inventory, Ethereal Cortex, mission reminder</dd><dt>Esc</dt><dd>close a panel, or this menu</dd></dl>`, (b) => {
-    b.addEventListener('click', (e) => { const m = e.target.closest('[data-m]'); if (!m) return; if (m.dataset.m === 'restart') location.reload(); else $('#panel').hidden = true; });
+    b.addEventListener('click', (e) => {
+      const m = e.target.closest('[data-m]'); if (!m) return;
+      if (m.dataset.m === 'restart') location.reload();
+      else if (m.dataset.m === 'quality') location.href = withQuality(LOW ? 'high' : 'low');
+      else $('#panel').hidden = true;
+    });
   });
   ui.tools.addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
